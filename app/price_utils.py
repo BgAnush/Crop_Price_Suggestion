@@ -1,7 +1,7 @@
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from typing import Dict, Any
-from .price_utils import get_nearby_districts, fetch_crop_prices, analyze_prices
+from price_utils import get_nearby_districts, fetch_crop_prices, analyze_prices
 
 app = FastAPI()
 
@@ -43,3 +43,4 @@ async def get_prices(request: PriceRequest) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail=f"No valid price data for {request.crop}")
 
     return final_result
+
