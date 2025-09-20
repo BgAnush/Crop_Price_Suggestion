@@ -1,7 +1,17 @@
 from fastapi import FastAPI, Query
+from fastapi.middleware.cors import CORSMiddleware
 from .utils import get_nearby_districts, fetch_crop_prices, analyze_prices
 
 app = FastAPI(title="Crop Price Analyzer API")
+
+# ✅ Enable CORS
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Or restrict to ["http://localhost:8081", "https://your-frontend.com"]
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 @app.get("/")
 def root():
