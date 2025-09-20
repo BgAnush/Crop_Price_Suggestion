@@ -1,52 +1,46 @@
+# app/main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, Any
+import sys
+import os
 
-from app.price_utils import get_nearby_districts, fetch_crop_prices, analyze_prices
+# Add current directory to path (ensures imports work on Render)
+sys.path.append(os.path.dirname(__file__))
 
-app = FastAPI(title="Crop Price Analyzer API")
+from price_utils import get_nearby_districts, fetch_crop_prices, analyze_prices
 
-# --------------------------
-# Enable CORS
-# --------------------------
-origins = [
-    "*",  # Allow all origins; for production, replace "*" with your frontend URL
-]
+app = FastAPI(title="Crop Price API")
 
+# Enable CORS for all origins
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"],  # change to specific domains in production
     allow_credentials=True,
-    allow_methods=["*"],  # GET, POST, etc.
-    allow_headers=["*"],  # Accept all headers
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
-# --------------------------
-# Input schema for JSON
-# --------------------------
+# Input JSON schema
 class PriceRequest(BaseModel):
     lat: float
     lon: float
     crop: str
 
-# --------------------------
-# API Endpoint
-# --------------------------
+
 @app.post("/prices")
 async def get_prices(request: PriceRequest) -> Dict[str, Any]:
     """
     Get crop price analysis for nearby districts.
-    Input JSON example:
-    { "lat": 13.0, "lon": 77.6, "crop": "Tomato" }
+    Input JSON example: { "lat": 13.0, "lon": 77.6, "crop": "Tomato" }
     """
-
     # 1️⃣ Find nearby districts
     nearby_districts = get_nearby_districts(request.lat, request.lon)
     if not nearby_districts:
         raise HTTPException(status_code=404, detail="No nearby districts found.")
 
-    # 2️⃣ Loop through districts until we find valid crop data
+    # 2️⃣ Loop through districts until we find valid price data
     final_result = None
     for state, district, dist in nearby_districts:
         df = fetch_crop_prices(state, request.crop, days=7)
