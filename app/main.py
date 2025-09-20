@@ -1,40 +1,66 @@
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from .utils import get_nearby_districts, fetch_crop_prices, analyze_prices
+from pydantic import BaseModel
+from typing import Dict, Any
+
+from app.price_utils import get_nearby_districts, fetch_crop_prices, analyze_prices
 
 app = FastAPI(title="Crop Price Analyzer API")
 
-# ✅ Enable CORS
+# --------------------------
+# Enable CORS
+# --------------------------
+origins = [
+    "*",  # Allow all origins; for production, replace "*" with your frontend URL
+]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Or restrict to ["http://localhost:8081", "https://your-frontend.com"]
+    allow_origins=origins,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],  # GET, POST, etc.
+    allow_headers=["*"],  # Accept all headers
 )
 
-@app.get("/")
-def root():
-    return {"message": "Welcome to Crop Price Analyzer API 🚀"}
+# --------------------------
+# Input schema for JSON
+# --------------------------
+class PriceRequest(BaseModel):
+    lat: float
+    lon: float
+    crop: str
 
-@app.get("/prices")
-def get_prices(lat: float = Query(...), lon: float = Query(...), crop: str = Query(...)):
-    nearby_districts = get_nearby_districts(lat, lon)
+# --------------------------
+# API Endpoint
+# --------------------------
+@app.post("/prices")
+async def get_prices(request: PriceRequest) -> Dict[str, Any]:
+    """
+    Get crop price analysis for nearby districts.
+    Input JSON example:
+    { "lat": 13.0, "lon": 77.6, "crop": "Tomato" }
+    """
+
+    # 1️⃣ Find nearby districts
+    nearby_districts = get_nearby_districts(request.lat, request.lon)
     if not nearby_districts:
-        return {"error": "No nearby districts found."}
+        raise HTTPException(status_code=404, detail="No nearby districts found.")
 
-    states_to_check = sorted(set([s for s, _, _ in nearby_districts]))
-    for state in states_to_check:
-        df_state = fetch_crop_prices(state, crop.title().strip())
-        if df_state.empty:
-            continue
+    # 2️⃣ Loop through districts until we find valid crop data
+    final_result = None
+    for state, district, dist in nearby_districts:
+        df = fetch_crop_prices(state, request.crop, days=7)
+        if not df.empty:
+            result = analyze_prices(df, request.crop)
+            if "error" not in result:
+                final_result = {
+                    "input": {"lat": request.lat, "lon": request.lon, "crop": request.crop},
+                    "closest_district": {"state": state, "district": district, "distance_km": round(dist, 2)},
+                    **result
+                }
+                break
 
-        nearby_names = [d for s, d, _ in nearby_districts if s == state]
-        df_nearby = df_state[df_state["District"].isin(nearby_names)]
+    if not final_result:
+        raise HTTPException(status_code=404, detail=f"No valid price data for {request.crop}")
 
-        if df_nearby.empty:
-            continue
-
-        return analyze_prices(df_nearby, crop)
-
-    return {"error": f"No {crop} records found in nearby states (last 7 days)."}
+    return final_result
