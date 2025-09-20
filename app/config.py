@@ -1,3 +1,0 @@
-API_KEY = "579b464db66ec23bdd0000014b881778de594c5264e78a7965b6b574"
-URL = "https://api.data.gov.in/resource/35985678-0d79-46b4-9ed6-6f13308a1d24"
-MAX_DISTANCE_KM = 250
