@@ -1,85 +1,45 @@
-import requests
-import pandas as pd
-from datetime import datetime, timedelta
-from geopy.distance import geodesic
-from .config import API_KEY, URL, MAX_DISTANCE_KM
+from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
+from typing import Dict, Any
+from .price_utils import get_nearby_districts, fetch_crop_prices, analyze_prices
 
-# Load coordinates dataset
-district_coords_df = pd.read_csv("app/Coordinate_Dataset.csv")
+app = FastAPI()
 
 
-def get_nearby_districts(lat: float, lon: float, max_distance_km: int = MAX_DISTANCE_KM):
-    """Find districts within max_distance_km of the given coordinates."""
-    nearby = []
-    for _, row in district_coords_df.iterrows():
-        dlat, dlon = row["Latitude"], row["Longitude"]
-        dist = geodesic((lat, lon), (dlat, dlon)).km
-        if dist <= max_distance_km:
-            nearby.append((row["State"], row["District"], dist))
-    return sorted(nearby, key=lambda x: x[2])
+# ✅ Input schema for JSON
+class PriceRequest(BaseModel):
+    lat: float
+    lon: float
+    crop: str
 
 
-def fetch_crop_prices(state: str, crop: str, days: int = 7):
-    """Fetch crop price records for the given state and crop for the past N days."""
-    today = datetime.today()
-    dates = [(today - timedelta(days=i)).strftime("%d-%m-%Y") for i in range(1, days + 1)]
+@app.post("/prices")
+async def get_prices(request: PriceRequest) -> Dict[str, Any]:
+    """
+    Get crop price analysis for nearby districts.
+    Input must be JSON: { "lat": 13.0, "lon": 77.6, "crop": "Tomato" }
+    """
 
-    all_records = []
-    for d in dates:
-        params = {
-            "api-key": API_KEY,
-            "format": "json",
-            "limit": 5000,
-            "filters[State]": state,
-            "filters[Commodity]": crop,
-            "filters[Arrival_Date]": d
-        }
-        resp = requests.get(URL, params=params).json()
-        records = resp.get("records", [])
-        for r in records:
-            all_records.append({
-                "State": r.get("State"),
-                "District": r.get("District"),
-                "Market": r.get("Market"),
-                "Arrival_Date": r.get("Arrival_Date"),
-                "Modal_Price": r.get("Modal_Price")  # ₹ per quintal
-            })
-    return pd.DataFrame(all_records)
+    # 1️⃣ Find nearby districts
+    nearby_districts = get_nearby_districts(request.lat, request.lon)
+    if not nearby_districts:
+        raise HTTPException(status_code=404, detail="No nearby districts found.")
 
+    # 2️⃣ Loop through districts until we find data
+    final_result = None
+    for state, district, dist in nearby_districts:
+        df = fetch_crop_prices(state, request.crop, days=7)
+        if not df.empty:
+            result = analyze_prices(df, request.crop)
+            if "error" not in result:
+                final_result = {
+                    "input": {"lat": request.lat, "lon": request.lon, "crop": request.crop},
+                    "closest_district": {"state": state, "district": district, "distance_km": round(dist, 2)},
+                    **result
+                }
+                break
 
-def analyze_prices(df, crop: str):
-    """Analyze crop prices and return top 5 markets + price insights (₹/kg)."""
-    # Convert columns
-    df["Modal_Price_num"] = pd.to_numeric(df["Modal_Price"], errors="coerce")
-    df["Arrival_Date_dt"] = pd.to_datetime(df["Arrival_Date"], format="%d/%m/%Y", errors="coerce")
-    df = df.dropna(subset=["Modal_Price_num", "Arrival_Date_dt"])
+    if not final_result:
+        raise HTTPException(status_code=404, detail=f"No valid price data for {request.crop}")
 
-    # Keep latest record per market
-    df_latest = df.sort_values("Arrival_Date_dt").groupby("Market").tail(1)
-    df_top5 = df_latest.sort_values("Modal_Price_num", ascending=False).head(5)
-
-    # Convert to ₹/kg
-    df_top5 = df_top5.copy()
-    df_top5["Modal_Price_per_kg"] = df_top5["Modal_Price_num"] / 100
-
-    # Stats
-    prices_kg = df_top5["Modal_Price_per_kg"].tolist()
-    prices_kg_sorted = sorted(prices_kg)
-
-    if not prices_kg_sorted:
-        return {"error": f"No valid price data for {crop}"}
-
-    min_price = prices_kg_sorted[0]
-    max_price = prices_kg_sorted[-1]
-    median_price = prices_kg_sorted[len(prices_kg_sorted) // 2]
-
-    return {
-        "top5": df_top5[["State", "District", "Market", "Arrival_Date", "Modal_Price", "Modal_Price_per_kg"]]
-                    .to_dict(orient="records"),
-        "analysis": {
-            "min_price_per_kg": round(min_price, 2),
-            "median_price_per_kg": round(median_price, 2),
-            "max_price_per_kg": round(max_price, 2),
-            "suggested_profit_range": "Add ₹5–10 per kg for profit"
-        }
-    }
+    return final_result
