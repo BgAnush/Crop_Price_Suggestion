@@ -3,97 +3,116 @@ import requests
 import pandas as pd
 from datetime import datetime, timedelta
 from dotenv import load_dotenv
-from geopy.distance import geodesic
+import random
 
-# Load environment variables
 load_dotenv()
 
 API_KEY = os.getenv("API_KEY")
 BASE_URL = os.getenv("BASE_URL")
 
 
-def fetch_latest_nearby_price(state: str, crop: str, user_location: tuple, max_days: int = 15):
+def fetch_crop_prices(state: str, crop: str, days: int = 7, user_lat=None, user_lon=None):
     """
-    Fetch the latest available crop price for the NEAREST market.
-
-    Args:
-        state (str): State name (as per API)
-        crop (str): Commodity name
-        user_location (tuple): (latitude, longitude)
-        max_days (int): Look back days (default 15)
-
-    Returns:
-        dict: Data for latest date & nearest market:
-            {
-                "Market": ...,
-                "District": ...,
-                "Arrival_Date": ...,
-                "Modal_Price": ...,
-                "Distance_km": ...
-            }
+    Fetch latest crop prices. If API returns nothing,
+    generate sample dummy data for 5 nearest markets.
     """
 
     if not BASE_URL or not API_KEY:
-        raise ValueError("API_KEY or BASE_URL is missing in .env")
+        print("⚠ Missing API details, generating random prices...")
+        return generate_dummy_prices(user_lat, user_lon)
 
     today = datetime.today()
+    dates = [(today - timedelta(days=i)).strftime("%d-%m-%Y") for i in range(days)]
 
-    # Search from today backwards → stops when first date with data found
-    for i in range(max_days):
-        date_str = (today - timedelta(days=i)).strftime("%d-%m-%Y")
+    all_records = []
 
+    for d in dates:
         params = {
             "api-key": API_KEY,
             "format": "json",
             "limit": 5000,
             "filters[State]": state,
             "filters[Commodity]": crop,
-            "filters[Arrival_Date]": date_str
+            "filters[Arrival_Date]": d
         }
 
         try:
             resp = requests.get(BASE_URL, params=params, timeout=10)
+
             if resp.status_code != 200:
-                print(f"⚠️ API error {resp.status_code} for {date_str}")
                 continue
 
             data = resp.json()
             records = data.get("records", [])
 
-            # If we found a date with data → process nearest market
-            if records:
-                print(f"✅ Found latest available data on {date_str}")
+            for r in records:
+                all_records.append({
+                    "State": r.get("State"),
+                    "District": r.get("District"),
+                    "Market": r.get("Market"),
+                    "Latitude": r.get("Latitude"),
+                    "Longitude": r.get("Longitude"),
+                    "Arrival_Date": r.get("Arrival_Date"),
+                    "Modal_Price": r.get("Modal_Price")
+                })
 
-                # Add distance for each market
-                enriched = []
-                for r in records:
-                    if "Latitude" in r and "Longitude" in r:
-                        market_loc = (float(r["Latitude"]), float(r["Longitude"]))
-                        distance = geodesic(user_location, market_loc).km
-                    else:
-                        distance = None
+            # If this date gave results → stop searching older dates
+            if len(records) > 0:
+                break
 
-                    enriched.append({
-                        "State": r.get("State"),
-                        "District": r.get("District"),
-                        "Market": r.get("Market"),
-                        "Arrival_Date": r.get("Arrival_Date"),
-                        "Modal_Price": r.get("Modal_Price"),
-                        "Distance_km": distance
-                    })
-
-                # Convert to DataFrame
-                df = pd.DataFrame(enriched)
-
-                # Sort by nearest distance
-                df = df.sort_values("Distance_km")
-
-                # Return nearest market's info
-                return df.iloc[0].to_dict()
-
-        except Exception as e:
-            print(f"⚠️ Error: {e}")
+        except:
             continue
 
-    # If nothing is found for last `max_days`
-    return {"error": "No price data available for recent days."}
+    if len(all_records) == 0:
+        print("⚠ No API data found → using dummy prices")
+        return generate_dummy_prices(user_lat, user_lon)
+
+    # Convert to DataFrame
+    df = pd.DataFrame(all_records)
+
+    # If user location provided → sort by nearest
+    if user_lat is not None and user_lon is not None:
+        df["Distance"] = (
+            (df["Latitude"] - user_lat) ** 2 +
+            (df["Longitude"] - user_lon) ** 2
+        ) ** 0.5
+        df = df.sort_values("Distance")
+
+    # Limit to 5 nearest markets
+    return df.head(5)
+
+
+def generate_dummy_prices(user_lat=None, user_lon=None):
+    """ Returns random 5 markets with random prices as fallback """
+
+    markets = [
+        ("Kolar Market", 13.13, 78.13),
+        ("Bangarpet Market", 13.18, 78.26),
+        ("Malur Market", 13.00, 77.94),
+        ("KGF Market", 12.95, 78.27),
+        ("Mulbagal Market", 13.17, 78.40),
+    ]
+
+    data = []
+    for m in markets:
+        data.append({
+            "State": "Karnataka",
+            "District": "Kolar",
+            "Market": m[0],
+            "Latitude": m[1],
+            "Longitude": m[2],
+            "Arrival_Date": "N/A",
+            "Modal_Price": random.randint(10, 80)  # random price
+        })
+
+    df = pd.DataFrame(data)
+
+    # Sort by nearest
+    if user_lat and user_lon:
+        df["Distance"] = (
+            (df["Latitude"] - user_lat) ** 2 +
+            (df["Longitude"] - user_lon) ** 2
+        ) ** 0.5
+        df = df.sort_values("Distance")
+
+    return df.head(5)
