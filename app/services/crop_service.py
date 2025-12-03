@@ -9,11 +9,18 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 URL = os.getenv("BASE_URL")
 
-def fetch_crop_prices(state: str, crop: str, days: int = 7):
+def fetch_crop_prices(state: str, crop: str, months: int = 4):
+    """
+    Fetch crop prices for the last `months` months (default: 4 months).
+    """
+    days = months * 30     # approx 4 months = 120 days
     today = datetime.today()
+
+    # Generate date list for past X days
     dates = [(today - timedelta(days=i)).strftime("%d-%m-%Y") for i in range(1, days + 1)]
 
     all_records = []
+
     for d in dates:
         params = {
             "api-key": API_KEY,
@@ -23,8 +30,17 @@ def fetch_crop_prices(state: str, crop: str, days: int = 7):
             "filters[Commodity]": crop,
             "filters[Arrival_Date]": d
         }
-        resp = requests.get(URL, params=params).json()
-        records = resp.get("records", [])
+
+        try:
+            resp = requests.get(URL, params=params)
+            resp.raise_for_status()
+            data = resp.json()
+        except Exception as e:
+            print(f"Error fetching data for {d}: {e}")
+            continue
+
+        records = data.get("records", [])
+        
         for r in records:
             all_records.append({
                 "State": r.get("State"),
@@ -34,4 +50,5 @@ def fetch_crop_prices(state: str, crop: str, days: int = 7):
                 "Modal_Price": r.get("Modal_Price")
             })
 
-    return pd.DataFrame(all_records)
+    df = pd.DataFrame(all_records)
+    return df
