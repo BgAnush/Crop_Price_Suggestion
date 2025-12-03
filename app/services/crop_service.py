@@ -1,7 +1,6 @@
 import os
 import requests
 import pandas as pd
-from datetime import datetime, timedelta
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -9,26 +8,23 @@ load_dotenv()
 API_KEY = os.getenv("API_KEY")
 URL = os.getenv("BASE_URL")
 
-def fetch_crop_prices(state: str, crop: str, months: int = 4):
+def fetch_crop_prices(state: str, crop: str):
     """
-    Fetch crop prices for the last `months` months (default: 4 months).
+    Fetch ALL available crop price data for the given state + crop.
+    No date filters are applied.
     """
-    days = months * 30     # approx 4 months = 120 days
-    today = datetime.today()
-
-    # Generate date list for past X days
-    dates = [(today - timedelta(days=i)).strftime("%d-%m-%Y") for i in range(1, days + 1)]
-
     all_records = []
+    offset = 0
+    limit = 5000  # maximum supported by API
 
-    for d in dates:
+    while True:
         params = {
             "api-key": API_KEY,
             "format": "json",
-            "limit": 5000,
+            "limit": limit,
+            "offset": offset,
             "filters[State]": state,
-            "filters[Commodity]": crop,
-            "filters[Arrival_Date]": d
+            "filters[Commodity]": crop
         }
 
         try:
@@ -36,11 +32,16 @@ def fetch_crop_prices(state: str, crop: str, months: int = 4):
             resp.raise_for_status()
             data = resp.json()
         except Exception as e:
-            print(f"Error fetching data for {d}: {e}")
-            continue
+            print(f"Error fetching data: {e}")
+            break
 
         records = data.get("records", [])
-        
+
+        # Stop if no more data
+        if not records:
+            break
+
+        # Extract required fields
         for r in records:
             all_records.append({
                 "State": r.get("State"),
@@ -49,6 +50,8 @@ def fetch_crop_prices(state: str, crop: str, months: int = 4):
                 "Arrival_Date": r.get("Arrival_Date"),
                 "Modal_Price": r.get("Modal_Price")
             })
+
+        offset += limit  # go to next batch
 
     df = pd.DataFrame(all_records)
     return df
